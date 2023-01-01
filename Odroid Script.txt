@@ -1,0 +1,67 @@
+###RUN AS ROOT###
+#!/bin/bash
+echo "Geef Hostname:"
+read hostname
+echo "Geef TV ID (1=Dep/2=IKS/3=TF)"
+read tv_id
+until [[ $tv_id == [1-3] ]]; do
+	echo "Invalid! Enkel 1,2 of 3 toegestaan."
+        read tv_id
+done
+
+###HOSTNAME/PASSWORD###
+hostnamectl set-hostname $hostname
+echo -e "PASSWORD\PASSWORD" | passwd odroid
+
+###APT###
+apt update
+apt upgrade -y
+
+###NTP###
+timedatectl set-timezone "Europe/Brussels"
+mv /etc/systemd/timesyncd.conf /etc/systemd/timesyncd.conf.bak
+sed 's/#NTP=/NTP=ntp.kuleuven.be/' /etc/systemd/timesyncd.conf.bak > /etc/systemd/timesyncd.conf
+
+###SSHD CONFIG###
+mv /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+echo -e "# to check default values run /usr/sbin/sshd -T (i.e. PermitRootLogin is default set to 'no')\nInclude /etc/ssh/sshd_config.d/*.conf\nPermitRootLogin no\nChallengeResponseAuthentication no\nPasswordAuthentication yes\nKbdInteractiveAuthentication no\nLoginGraceTime 15s\nMaxAuthTries 3\nUsePAM yes\nPrintMotd no\nAcceptEnv LANG LC_*\nSubsystem sftp  /usr/lib/openssh/sftp-server\nMatch Address 10.118.102.0/24 # Enkel vanaf s.fys.kuleuven.be\n    PasswordAuthentication yes" > /etc/ssh/sshd_config
+systemctl restart sshd
+
+###AUTOMATIC UPDATES###
+apt install unattended-upgrades -y
+systemctl enable unattended-upgrades
+
+###INSTALL KIOSK SNAPS###
+apt install snapd -y
+snap install ubuntu-frame
+snap install wpe-webkit-mir-kiosk
+
+###CREATE KIOSK SERVICE AND ADD CRONJOB###
+if [ $tv_id -eq 1 ]; then
+	crontab -l > mycron
+	echo "@reboot snap set wpe-webkit-mir-kiosk url=https://Website1" >> mycron
+	crontab mycron
+	rm mycron
+	echo -e "#!/bin/sh\nubuntu-frame &\nwpe-webkit-mir-kiosk.cog" > /root/kiosk.sh
+elif [ $tv_id -eq 2 ]; then
+	crontab -l > mycron
+	echo "@reboot snap set wpe-webkit-mir-kiosk url=https://Website2" >> mycron
+	crontab mycron
+	rm mycron
+	echo -e "#!/bin/sh\nubuntu-frame &\nwpe-webkit-mir-kiosk.cog" > /root/kiosk.sh
+else
+	crontab -l > mycron
+	echo "@reboot snap set wpe-webkit-mir-kiosk url=https://Website3" >> mycron
+	crontab mycron
+	rm mycron
+	echo -e "#!/bin/sh\nubuntu-frame &\nwpe-webkit-mir-kiosk.cog" > /root/kiosk.sh
+fi
+chmod +x /root/kiosk.sh
+echo -e "[Unit]\nDescription=Ubuntu web kiosk\n[Service] \nExecStart=/root/kiosk.sh \n[Install] \nWantedBy=multi-user.target" > /etc/systemd/system/kiosk.service
+systemctl enable kiosk.service
+
+###FIREWALL##
+apt install iptables ufw -y
+ufw allow from SERVERVLAN to any port 22 proto tcp
+echo "y" | ufw enable
+reboot
